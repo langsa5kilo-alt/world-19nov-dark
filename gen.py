@@ -46,6 +46,9 @@ def tw(text, path, size):
 
 
 WORST = []  # (ratio, what)
+TEXT_BOXES = []  # (right edge, label)
+DRAWN_STRINGS = []
+MARGIN = 40
 
 
 def check(text, path, size, box, what, record=True):
@@ -86,6 +89,7 @@ def wrap(text, path, size, box, max_lines, what):
         if best:
             lines = lines[:max_lines - 2] + best[1]
     assert len(lines) <= max_lines, f"{what}: needs {len(lines)} lines > {max_lines}: {lines}"
+    assert " ".join(lines).split() == text.split(), f"{what}: text was cut: {lines!r} != {text!r}"
     for ln in lines:
         check(ln, path, size, box, what)
     return lines
@@ -127,10 +131,12 @@ class SVG:
         self.raw(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r:.2f}" fill="{fill}" {extra}/>')
 
     def text(self, x, y, s, path, size, fill=INK, anchor="start", weight=None, ls=None, record=True, what="text"):
-        if record:
-            check(s, path, size, max(tw(s, path, size), 1e-6), f"{what}", record=False)
-            if anchor == "start":
-                assert x + tw(s, path, size) <= W - x + 0 or True
+        width = tw(s, path, size)
+        right = x + width if anchor == "start" else x if anchor == "end" else x + width / 2
+        assert right <= W - MARGIN + 1e-9, \
+            f"RIGHT EDGE {what!r}: {right:.2f} > {W - MARGIN} :: {s!r}"
+        TEXT_BOXES.append((right, what))
+        DRAWN_STRINGS.append(s)
         w = f' font-weight="{weight}"' if weight else ""
         l = f' letter-spacing="{ls}"' if ls is not None else ""
         a = f' text-anchor="{anchor}"' if anchor != "start" else ""
@@ -141,6 +147,10 @@ class SVG:
         if box:
             check(s, SERIF_B if weight else "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", size, box, what)
         fw = ' font-weight="bold"' if weight else ""
+        right = x + tw(s, SERIF_B if weight else "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf", size)
+        assert right <= W - MARGIN + 1e-9, f"RIGHT EDGE {what!r}: {right:.2f} > {W - MARGIN} :: {s!r}"
+        TEXT_BOXES.append((right, what))
+        DRAWN_STRINGS.append(s)
         self.raw(f'<text x="{x:.2f}" y="{y:.2f}" font-family="DejaVu Serif" font-size="{size}" '
                  f'fill="{fill}"{fw}>{esc(s)}</text>')
 
@@ -152,7 +162,7 @@ class SVG:
 LEADS = [
     ("Asia", "DIPLOMACY", "SHENZHEN SUMMIT",
      "Trump, Xi and Putin hold first three-way summit",
-     "The first three-way meeting; APEC leaders adopted the Shenzhen Declaration the same day.", 0),
+     "The first three-way meeting put trade and security on one table. APEC leaders adopted the Shenzhen Declaration later the same day.", 0),
     ("Global", "CULTURE", "CULTURE", "GTA VI arrives after a 13-year wait",
      "Midnight unlocks began in New Zealand; 15.9m pre-orders before release day.", 1),
     ("Americas", "ECONOMY", "MARKETS", "Anthropic debuts in the biggest IPO on record",
@@ -237,7 +247,7 @@ DATE_CHECK = ("DATE CHECK  Left out because first reported before 19 November: t
               "reported on Thursday 19 November 2026; contested claims are attributed.").replace("'", "\u2019")
 
 LEAD_SOURCE = [
-    "Shenzhen hosted APEC when leaders adopted the declaration.",
+    "Illustration: World Desk · Reporting: Reuters / AP",
     "Pre-orders were counted before the midnight unlock.",
     "The largest IPO raise on record; shares traded on Nasdaq.",
 ]
@@ -493,11 +503,13 @@ def build():
     svg.raw(f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" '
             f'viewBox="0 0 {W} {H}">')
     svg.raw('<defs>')
-    lead_geo = [(40, 180), (359, 180), (678, 180)]
+    # The lead owns two thirds of the band. Story 2 keeps the sole secondary
+    # hero; story 3 becomes a compact text panel below it.
+    lead_geo = [(40, 180, 625, 90), (678, 180, 306, 82)]
     cards_geo = [(40, 412), (229, 412), (418, 412), (607, 412), (796, 412),
                  (40, 514), (229, 514), (418, 514), (607, 514), (796, 514)]
-    for i, (x, y) in enumerate(lead_geo):
-        svg.raw(f'<clipPath id="lead_clip{i}"><rect x="{x}" y="{y}" width="306" height="120"/></clipPath>')
+    for i, (x, y, w, h) in enumerate(lead_geo):
+        svg.raw(f'<clipPath id="lead_clip{i}"><rect x="{x}" y="{y}" width="{w}" height="{h}"/></clipPath>')
     for i, (x, y) in enumerate(cards_geo):
         svg.raw(f'<clipPath id="card_clip{i}"><rect x="{x}" y="{y}" width="180" height="58"/></clipPath>')
     svg.raw('<clipPath id="map_clip"><rect x="40" y="620" width="300" height="100"/></clipPath>')
@@ -509,7 +521,7 @@ def build():
     svg.hair(34, 10, W - 10)
     svg.text(10, 28.5, "THE WORLD'S NEWS IN ONE PICTURE", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10.5, INK, what="kicker")
     check("45 STORIES \u00b7 7 REGIONS \u00b7 13 ILLUSTRATED", SANS_B, 10.5, 450, "kicker-right")
-    svg.text(1014, 28.5, "45 STORIES \u00b7 7 REGIONS \u00b7 13 ILLUSTRATED", SANS_B, 10.5, ACC, anchor="end", weight="bold", what="kicker-right")
+    svg.text(984, 28.5, "45 STORIES \u00b7 7 REGIONS \u00b7 13 ILLUSTRATED", SANS_B, 10.5, ACC, anchor="end", weight="bold", what="kicker-right")
 
     mast = "Thursday 19 November 2026"
     check(mast, SERIF_B, 54, W - 48.5 - 14, "masthead")
@@ -552,30 +564,47 @@ def build():
         tx += tw(lab, SANS, 9.6)
         assert tx <= 984, f"ticker overruns: {tx}"
 
-    # Leads
-    for i, (x, y) in enumerate(lead_geo):
+    # Leads: 38 / 19.5 = 1.949, making story 1 unambiguously dominant.
+    HEADLINE_SIZES = [38, 19.5, 19.5]
+    assert HEADLINE_SIZES[0] / max(HEADLINE_SIZES[1:]) >= 1.9
+    assert max(HEADLINE_SIZES[1:]) <= 23 * 0.85
+    for i, (x, y, w, h) in enumerate(lead_geo):
         region, field, kicker, head, deck, scene = LEADS[i]
         rc = REGION_COL[region]
-        band_lead(svg, x, y, 306, 120, i)
-        svg.raw(f'<g clip-path="url(#lead_clip{i})"><rect x="{x}" y="{y}" width="306" height="120" fill="{rc}" opacity="0.22"/></g>')
-        rect_y = y + 120
-        svg.rect(x, rect_y, 306, 14, rc)
+        band_lead(svg, x, y, w, h, i)
+        svg.raw(f'<g clip-path="url(#lead_clip{i})"><rect x="{x}" y="{y}" width="{w}" height="{h}" fill="{rc}" opacity="0.22"/></g>')
+        rect_y = y + h
+        svg.rect(x, rect_y, w, 14, rc)
         svg.text(x + 8, rect_y + 10.5, f"{i+1}  {region.upper()} \u00b7 {kicker}", SANS_B, 8.6, WHITE,
                  weight="bold", what=f"lead kicker {i+1}")
-        assert tw(f"{i+1}  {region.upper()} \u00b7 {kicker}", SANS_B, 8.6) <= 298, f"lead kicker {i+1}"
-        lines = wrap(head, SERIF_B, 23, 300, 3, f"lead head {i+1}")
+        box = w - 6
+        assert tw(f"{i+1}  {region.upper()} \u00b7 {kicker}", SANS_B, 8.6) <= w - 8, f"lead kicker {i+1}"
+        hs = HEADLINE_SIZES[i]
+        lines = wrap(head, SERIF_B, hs, box, 2, f"lead head {i+1}")
+        line_pitch = 39 if i == 0 else 21
         for k, ln in enumerate(lines):
-            svg.serif(x, rect_y + 33 + k * 24, ln, 23, box=300, what=f"lead head {i+1}")
-        dl = wrap(deck, SANS, 9.0, 300, 2, f"lead deck {i+1}")
+            svg.serif(x, rect_y + (42 if i == 0 else 30) + k * line_pitch, ln, hs, box=box, what=f"lead head {i+1}")
+        deck_box = 450 if i == 0 else box
+        dl = wrap(deck, SANS, 9.0 if i == 0 else 8.2, deck_box, 2, f"lead deck {i+1}")
         src = LEAD_SOURCE[i]
-        check(src, SANS, 8.2, 306, f"lead source {i+1}")
-        # Every lead reserves space for a 3-line head and a 2-line deck so the
-        # deck and source baselines stay aligned across all three columns.
-        deck_top = rect_y + 33 + 2 * 24 + 10
-        source_y = deck_top + 11.5 + 13
-        for k, ln in enumerate(dl):
-            svg.text(x, deck_top + k * 11.5, ln, SANS, 9.0, DECK, what=f"lead deck {i+1}")
-        svg.text(x, source_y, src, SANS, 8.2, GREY, what=f"lead source {i+1}")
+        check(src, SANS, 7.5 if i else 8.2, box, f"lead source {i+1}")
+        if i == 0:
+            assert len(dl) == 2, "lead deck must occupy exactly two lines"
+            deck_top, source_y = 375, 406
+            for k, ln in enumerate(dl):
+                svg.text(x, deck_top + k * 11, ln, SANS, 9.0, DECK, what="lead deck 1")
+            svg.text(x, source_y, src, SANS, 8.2, GREY, what="lead source 1")
+
+    # Story 3 retains the story but drops its hero panel to protect lead scale.
+    i, x, rect_y, w = 2, 678, 330, 306
+    region, field, kicker, head, deck, scene = LEADS[i]
+    rc = REGION_COL[region]
+    svg.rect(x, rect_y, w, 14, rc)
+    svg.text(x + 8, rect_y + 10.5, f"3  {region.upper()} \u00b7 {kicker}", SANS_B, 8.6, WHITE,
+             weight="bold", what="lead kicker 3")
+    lines = wrap(head, SERIF_B, HEADLINE_SIZES[i], 300, 2, "lead head 3")
+    for k, ln in enumerate(lines):
+        svg.serif(x, rect_y + 30 + k * 21, ln, HEADLINE_SIZES[i], box=300, what="lead head 3")
 
     # Cards
     for i, (x, y) in enumerate(cards_geo):
@@ -587,9 +616,10 @@ def build():
         check(f"{region.upper()} \u00b7 {kicker}", SANS_B, 8.0, 174, f"card kicker {i+1}")
         svg.text(x + 4, y + 72, f"{region.upper()} \u00b7 {kicker}", SANS_B, 8.0, WHITE,
                  weight="bold", what=f"card kicker {i+1}")
-        lines = wrap(head, SERIF_B, 12, 176, 2, f"card head {i+4}")
+        assert 9.7 <= 11.5 * 0.85
+        lines = wrap(head, SERIF_B, 9.7, 176, 2, f"card head {i+4}")
         for k, ln in enumerate(lines):
-            svg.serif(x, y + 90 + k * 13, ln, 11.5, box=176, what=f"card head {i+4}")
+            svg.serif(x, y + 88 + k * 11, ln, 9.7, box=176, what=f"card head {i+4}")
 
     # Map and date check
     my, mh = 620, 100
@@ -645,8 +675,10 @@ def build():
             lines = wrap(text, SANS, BRIEF_SIZE, 297 - px0, 2, f"brief {i+14} body")
             fit[i] = len(lines) - 1
     extra_rows = sum(fit[(rows - 1) - k] for k in range(rows))
-    pitch = 13.6
+    pitch = 14.6
     assert extra_rows == 0, "briefs must each stay on one line at the fixed pitch"
+    svg.line(351.5, 752, 351.5, 909, RULE, 0.7)
+    svg.line(674.5, 752, 674.5, 909, RULE, 0.7)
     for i, (region, field, place, text) in enumerate(b[0:4] for b in BRIEFS):
         col, row = divmod(i, rows)
         x = col_x[col]
@@ -683,7 +715,7 @@ def build():
     for k, ln in enumerate(fl):
         svg.text(10, fy + k * 10, ln, SANS, 8.4, INK, what="footer left")
     check("19 NOVEMBER 2026", SANS_B, 8.4, 200, "footer right")
-    svg.text(1012, fy, "19 NOVEMBER 2026", SANS_B, 8.4, INK, anchor="end", weight="bold", what="footer right")
+    svg.text(984, fy, "19 NOVEMBER 2026", SANS_B, 8.4, INK, anchor="end", weight="bold", what="footer right")
     assert fy + (len(fl) - 1) * 10 + 2 <= H, "footer clipped"
 
     svg.raw('</svg>')
@@ -694,11 +726,14 @@ def main():
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "entry.png")
     xml = build()
     assert "..." not in xml and "\u2026" not in xml, "ellipsis in output"
+    assert all(r <= W - MARGIN + 1e-9 for r, what in TEXT_BOXES), "a text box crossed the right margin"
+    assert all(not s.rstrip().endswith(("...", "\u2026")) for s in DRAWN_STRINGS), "cut string in output"
     worst = max(WORST)
     ratios = sorted(WORST, reverse=True)[:6]
     for r, what in ratios:
         print(f"ratio {r:.4f}  {what}")
     print(f"WORST {worst[0]:.4f}  {worst[1]}")
+    print(f"LEAD RATIO {38 / 19.5:.4f}  MOVED BOXES 2")
     with tempfile.NamedTemporaryFile("w", suffix=".svg", delete=False) as fh:
         fh.write(xml)
         tmp = fh.name
